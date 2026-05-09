@@ -3,6 +3,7 @@
  * Raw socket HTTP client. No libcurl. No extra DLLs.
  * Works on Windows (Winsock2) and Linux/Mac (POSIX).
  */
+// I need to correct the extended description
 
 #include "network.h"
 #include <stdio.h>
