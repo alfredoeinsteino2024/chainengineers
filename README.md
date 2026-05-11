@@ -12,6 +12,7 @@ Small merchants in emerging economies like Nigeria have no access to affordable 
 - Software-only and technically intimidating
 - Dependent on expensive centralized hardware
 - Impractical for local markets, campuses, and transport systems
+- Inaccessible to customers who don't own crypto wallets
 
 ## The Solution
 
@@ -24,6 +25,8 @@ ChainEngineers is an embedded Solana payment terminal where:
 ---
 
 ## Demo
+
+🎥 **Demo Video:** https://www.loom.com/share/e6a757cfbf9748fab841fae9ae3bcf45
 
 | Screen | Description |
 |---|---|
@@ -153,7 +156,35 @@ gcc Dev3Pack.c ui\ui.c states\states.c network\network.c qr\qrcodegen.c -o chain
 
 ---
 
-## Hardware Vision (Next Phase)
+## Roadmap
+
+### ✅ Phase 1 — Concept & Architecture
+- State machine design
+- SDL2 simulator
+- UI screens and rendering
+
+### ✅ Phase 2 — Live Payment Flow (Current)
+- Real Solana Pay QR code generation
+- Raw TCP socket backend communication
+- Live Solana Devnet transaction confirmation
+- Real TX signature displayed on terminal
+
+### 🔜 Phase 3 — Fiat On-Ramp (SolaChain)
+The biggest barrier to crypto adoption in Nigeria is that most people don't own crypto wallets. Phase 3 solves this with a **dual payment mode**:
+
+- **Mode 1:** Customer scans QR code → pays SOL directly via Phantom wallet
+- **Mode 2:** Customer sends NGN to a **SolaChain virtual bank account** → auto-converts to SOL → merchant receives SOL
+
+Both modes show on the same terminal screen. The merchant always receives SOL regardless of how the customer pays. This means **any Nigerian with a bank account can pay at a ChainEngineers terminal** — no crypto wallet required.
+
+**Target:** 40 million Nigerian micro-merchants currently excluded from digital payments.
+
+### 🔜 Phase 4 — Hardware Deployment
+Deploy on ESP32 hardware for real-world merchant locations.
+
+---
+
+## Hardware Vision
 
 This Digital Twin validates the full payment architecture before physical deployment.
 
@@ -190,9 +221,22 @@ This Digital Twin validates the full payment architecture before physical deploy
 
 ---
 
+## The Story
+
+I walked into Dev3Pack Global Hackathon 2025 with no idea what I was going to build. I saw teams building web apps and asked myself what I could contribute with my background in C and embedded systems.
+
+I noticed that crypto payments in Nigeria are still mostly software-only and inaccessible to everyday merchants. That gap felt real to me because I see it around me daily.
+
+This was my first time writing real blockchain code. I researched as I built, figured things out step by step, and shipped a working system with real on-chain transactions in under 48 hours.
+
+I am still a student. I am still learning. But I built something real that solves a real problem I see around me. That is why I want to keep building it.
+
+---
+
 ## Team
 
-**ChainEngineers** — Dev3Pack Global Hackathon 2025
+**Fadipe Toluwanimi Alfred** — Solo Developer
+Dev3Pack Global Hackathon 2025
 Built in Nigeria 🇳🇬
 
 ---
