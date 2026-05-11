@@ -1,6 +1,6 @@
-# ChainEngineers — Solana Embedded Payment Terminal
+# ChainEngineers - Solana Embedded Payment Terminal
 
-> **Dev3Pack Global Hackathon 2025 — Solana Track**
+> **Dev3Pack Global Hackathon 2026 - Solana Track**
 
 A low-cost embedded payment terminal that brings real Solana transactions into physical commerce. Built as a **Digital Twin simulator** in C with SDL2, communicating with a Node.js backend and confirming real transactions on **Solana Devnet**.
 
@@ -100,9 +100,9 @@ https://explorer.solana.com/address/AiYTy2PLhJLsDRnFMNV886Y6fHvfb9sRouiLkgkKnGdx
 ## Backend API
 
 ```
-POST /payment/create      — create payment session
-GET  /payment/:id/status  — poll for confirmation
-GET  /health              — server health + devnet status
+POST /payment/create      - create payment session
+GET  /payment/:id/status  - poll for confirmation
+GET  /health              - server health + devnet status
 ```
 
 ---
@@ -111,21 +111,21 @@ GET  /health              — server health + devnet status
 
 ```
 chainengineers/
-├── Dev3Pack.c          — main loop, state machine, thread coordination
+├── Dev3Pack.c          - main loop, state machine, thread coordination
 ├── ui/
-│   ├── ui.c            — SDL2 render dispatch, 6 screen renderers
+│   ├── ui.c            - SDL2 render dispatch, 6 screen renderers
 │   └── ui.h
 ├── states/
-│   ├── states.c        — state machine, AmountInput struct
+│   ├── states.c        - state machine, AmountInput struct
 │   └── states.h
 ├── network/
-│   ├── network.c       — raw HTTP client, SDL threads, mutex shared state
+│   ├── network.c       - raw HTTP client, SDL threads, mutex shared state
 │   └── network.h
 ├── qr/
-│   ├── qrcodegen.c     — Nayuki QR encoder (pure C)
+│   ├── qrcodegen.c     - Nayuki QR encoder (pure C)
 │   └── qrcodegen.h
 ├── backend/
-│   ├── server.js       — Express + Solana Devnet monitor
+│   ├── server.js       - Express + Solana Devnet monitor
 │   └── package.json
 └── assets/
     └── Roboto_Condensed-Regular.ttf
@@ -158,28 +158,28 @@ gcc Dev3Pack.c ui\ui.c states\states.c network\network.c qr\qrcodegen.c -o chain
 
 ## Roadmap
 
-### ✅ Phase 1 — Concept & Architecture
+### ✅ Phase 1 - Concept & Architecture
 - State machine design
 - SDL2 simulator
 - UI screens and rendering
 
-### ✅ Phase 2 — Live Payment Flow (Current)
+### ✅ Phase 2 - Live Payment Flow (Current)
 - Real Solana Pay QR code generation
 - Raw TCP socket backend communication
 - Live Solana Devnet transaction confirmation
 - Real TX signature displayed on terminal
 
-### 🔜 Phase 3 — Fiat On-Ramp (SolaChain)
+### 🔜 Phase 3 - Fiat On-Ramp (SolaChain)
 The biggest barrier to crypto adoption in Nigeria is that most people don't own crypto wallets. Phase 3 solves this with a **dual payment mode**:
 
 - **Mode 1:** Customer scans QR code → pays SOL directly via Phantom wallet
 - **Mode 2:** Customer sends NGN to a **SolaChain virtual bank account** → auto-converts to SOL → merchant receives SOL
 
-Both modes show on the same terminal screen. The merchant always receives SOL regardless of how the customer pays. This means **any Nigerian with a bank account can pay at a ChainEngineers terminal** — no crypto wallet required.
+Both modes show on the same terminal screen. The merchant always receives SOL regardless of how the customer pays. This means **any Nigerian with a bank account can pay at a ChainEngineers terminal** - no crypto wallet required.
 
 **Target:** 40 million Nigerian micro-merchants currently excluded from digital payments.
 
-### 🔜 Phase 4 — Hardware Deployment
+### 🔜 Phase 4 - Hardware Deployment
 Deploy on ESP32 hardware for real-world merchant locations.
 
 ---
@@ -203,10 +203,10 @@ This Digital Twin validates the full payment architecture before physical deploy
 
 ## Why Solana
 
-- **Sub-second confirmation** — essential for point-of-sale UX
-- **Near-zero fees** — practical for small merchants
-- **Solana Pay standard** — QR-based payment protocol built-in
-- **Scalable infrastructure** — ready for machine-to-machine payments
+- **Sub-second confirmation** - essential for point-of-sale UX
+- **Near-zero fees** - practical for small merchants
+- **Solana Pay standard** - QR-based payment protocol built-in
+- **Scalable infrastructure** - ready for machine-to-machine payments
 
 ---
 
@@ -235,8 +235,8 @@ I am still a student. I am still learning. But I built something real that solve
 
 ## Team
 
-**Fadipe Toluwanimi Alfred** — Solo Developer
-Dev3Pack Global Hackathon 2025
+**Fadipe Toluwanimi Alfred** - Solo Developer
+Dev3Pack Global Hackathon 2026
 Built in Nigeria 🇳🇬
 
 ---
