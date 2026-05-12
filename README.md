@@ -223,7 +223,7 @@ This Digital Twin validates the full payment architecture before physical deploy
 
 ## The Story
 
-I walked into Dev3Pack Global Hackathon 2025 with no idea what I was going to build. I saw teams building web apps and asked myself what I could contribute with my background in C and embedded systems.
+I walked into Dev3Pack Global Hackathon 2026 with no idea what I was going to build. I saw teams building web apps and asked myself what I could contribute with my background in C and embedded systems.
 
 I noticed that crypto payments in Nigeria are still mostly software-only and inaccessible to everyday merchants. That gap felt real to me because I see it around me daily.
 
