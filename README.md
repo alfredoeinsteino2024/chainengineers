@@ -1,6 +1,6 @@
 # ChainEngineers - Solana Embedded Payment Terminal
 
-> **Dev3Pack Global Hackathon 2026 - Solana Track**
+> **Dev3Pack Global Hackathon 2025 - Solana Track**
 
 A low-cost embedded payment terminal that brings real Solana transactions into physical commerce. Built as a **Digital Twin simulator** in C with SDL2, communicating with a Node.js backend and confirming real transactions on **Solana Devnet**.
 
@@ -16,11 +16,39 @@ Small merchants in emerging economies like Nigeria have no access to affordable 
 
 ## The Solution
 
-ChainEngineers is an embedded Solana payment terminal where:
+ChainEngineers is an embedded Solana payment terminal that operates in **two modes simultaneously**:
+
+**Active Mode** — Merchant initiates payment:
 - Merchants enter an amount in **Naira**
 - The system converts to **SOL** and generates a real **Solana Pay QR code**
 - The customer scans with **Phantom wallet** and sends real SOL
 - The terminal detects the **on-chain transaction** and confirms with a real **TX signature**
+
+**Passive Mode** — Always-on background receiver:
+- Background thread monitors wallet 24/7
+- Detects any incoming SOL even when terminal is IDLE
+- Automatically records to history and transitions to CONFIRMED
+- Behaves exactly like a real embedded POS terminal
+
+---
+
+## Key Differentiator — Dual Mode Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              ChainEngineers Terminal                     │
+│                                                         │
+│   ACTIVE MODE              PASSIVE MODE                 │
+│   ───────────              ────────────                 │
+│   Merchant enters amount   Background thread runs 24/7  │
+│   QR code generated        Polls /wallet/balance        │
+│   Customer scans & pays    Detects any incoming SOL     │
+│   Terminal confirms        Auto-records to history      │
+│                            Auto-transitions to CONFIRMED │
+└─────────────────────────────────────────────────────────┘
+```
+
+This makes ChainEngineers behave exactly like a real POS terminal — money can arrive at any time without the merchant needing to initiate a transaction.
 
 ---
 
@@ -28,14 +56,26 @@ ChainEngineers is an embedded Solana payment terminal where:
 
 🎥 **Demo Video:** https://www.loom.com/share/e6a757cfbf9748fab841fae9ae3bcf45
 
-| Screen | Description |
+### Terminal State Machine (8 States)
+
+```
+STATE_IDLE → STATE_ENTER_AMOUNT → STATE_PROCESSING
+          → STATE_WAITING_PAYMENT → STATE_CONFIRMED → STATE_IDLE
+                                 → STATE_FAILED    → STATE_IDLE
+STATE_IDLE → STATE_HISTORY → STATE_IDLE
+STATE_IDLE → STATE_BALANCE → STATE_IDLE
+```
+
+| State | Description |
 |---|---|
 | IDLE | Splash screen, waiting for merchant |
-| ENTER AMOUNT | Merchant keys in Naira amount |
+| ENTER_AMOUNT | Merchant keys in Naira amount |
 | PROCESSING | Terminal connects to backend, creates payment session |
-| WAITING | Real QR code displayed, polling Solana Devnet |
+| WAITING_PAYMENT | Real QR code displayed, polling Solana Devnet |
 | CONFIRMED | Payment verified on-chain, TX signature displayed |
 | FAILED | Timeout or rejection handling |
+| HISTORY | Last 4 confirmed transactions with TX signatures |
+| BALANCE | Current SOL balance + Naira equivalent |
 
 **Terminal Wallet Address (Devnet):**
 ```
@@ -43,6 +83,37 @@ AiYTy2PLhJLsDRnFMNV886Y6fHvfb9sRouiLkgkKnGdx
 ```
 Verify on Solana Explorer:
 https://explorer.solana.com/address/AiYTy2PLhJLsDRnFMNV886Y6fHvfb9sRouiLkgkKnGdx?cluster=devnet
+
+---
+
+## Features
+
+### Transaction History (`H` key from IDLE or CONFIRMED)
+- Displays up to 4 most recent confirmed transactions
+- Each row shows: Naira amount, SOL equivalent, truncated TX signature, timestamp
+- Arrow keys navigate between records
+- Auto-populates after every confirmed payment
+
+### Balance Screen (`B` key from IDLE)
+- Shows current SOL balance of terminal wallet
+- Shows Naira equivalent
+- Updates automatically after every confirmed payment
+
+### Passive Payment Monitor
+- Background SDL thread runs continuously
+- Polls `/wallet/balance` every 10 seconds
+- Detects incoming SOL even when terminal is IDLE
+- Automatically records to history and updates balance
+- Transitions terminal to CONFIRMED screen on detection
+
+### Key Controls
+```
+ENTER    — start new payment
+H        — view transaction history
+B        — view wallet balance
+ESC      — cancel / return to IDLE
+↑ ↓      — navigate history records
+```
 
 ---
 
@@ -66,22 +137,23 @@ https://explorer.solana.com/address/AiYTy2PLhJLsDRnFMNV886Y6fHvfb9sRouiLkgkKnGdx
 │   SDL2 Terminal      │ ──────────────────────▶ │   Node.js Backend    │
 │   (C + Winsock2)    │                         │   (Express API)      │
 │                     │ ◀────────────────────── │                      │
-│  6-State Machine:   │    payment_id + status  │  Solana Devnet       │
-│  IDLE               │                         │  Transaction Monitor │
-│  ENTER_AMOUNT       │                         │                      │
-│  PROCESSING         │                         └──────────────────────┘
-│  WAITING_PAYMENT    │                                    │
-│  CONFIRMED          │                                    ▼
-│  FAILED             │                         ┌──────────────────────┐
-└─────────────────────┘                         │   Solana Devnet      │
-                                                │   Real TX Confirmed  │
-                                                └──────────────────────┘
+│  8-State Machine    │    payment_id + status  │  Solana Devnet       │
+│  Active + Passive   │    balance + history    │  Transaction Monitor │
+│  Payment Modes      │                         │  Balance Query       │
+└─────────────────────┘                         └──────────────────────┘
+        │                                                   │
+        │ Passive Monitor Thread                            ▼
+        │ (polls every 10s)                    ┌──────────────────────┐
+        └──────────────────────────────────────│   Solana Devnet      │
+                                               │   Real TX Confirmed  │
+                                               └──────────────────────┘
 ```
 
 ---
 
 ## Payment Flow
 
+### Active Mode
 ```
 1. Merchant enters amount in Naira
 2. Terminal sends POST /payment/create via raw TCP socket
@@ -92,7 +164,17 @@ https://explorer.solana.com/address/AiYTy2PLhJLsDRnFMNV886Y6fHvfb9sRouiLkgkKnGdx
 7. Backend detects new transaction on terminal address
 8. SDL2 poll thread receives confirmed status
 9. Terminal transitions to CONFIRMED screen
-10. Real TX signature displayed to merchant
+10. Real TX signature displayed and saved to history
+```
+
+### Passive Mode
+```
+1. Background thread polls /wallet/balance every 10 seconds
+2. New incoming SOL detected on terminal wallet
+3. Transaction recorded to history automatically
+4. Balance updated in real time
+5. Terminal transitions to CONFIRMED screen
+6. Merchant notified of incoming payment
 ```
 
 ---
@@ -100,9 +182,10 @@ https://explorer.solana.com/address/AiYTy2PLhJLsDRnFMNV886Y6fHvfb9sRouiLkgkKnGdx
 ## Backend API
 
 ```
-POST /payment/create      - create payment session
-GET  /payment/:id/status  - poll for confirmation
-GET  /health              - server health + devnet status
+POST /payment/create      — create payment session
+GET  /payment/:id/status  — poll for confirmation
+GET  /wallet/balance      — current SOL balance + latest TX
+GET  /health              — server health + devnet status
 ```
 
 ---
@@ -111,21 +194,21 @@ GET  /health              - server health + devnet status
 
 ```
 chainengineers/
-├── Dev3Pack.c          - main loop, state machine, thread coordination
+├── Dev3Pack.c          — main loop, 8-state machine, dual-mode threading
 ├── ui/
-│   ├── ui.c            - SDL2 render dispatch, 6 screen renderers
+│   ├── ui.c            — SDL2 render dispatch, 8 screen renderers
 │   └── ui.h
 ├── states/
-│   ├── states.c        - state machine, AmountInput struct
+│   ├── states.c        — state machine, AmountInput, TxHistory structs
 │   └── states.h
 ├── network/
-│   ├── network.c       - raw HTTP client, SDL threads, mutex shared state
+│   ├── network.c       — raw HTTP client, SDL threads, mutex shared state
 │   └── network.h
 ├── qr/
-│   ├── qrcodegen.c     - Nayuki QR encoder (pure C)
+│   ├── qrcodegen.c     — Nayuki QR encoder (pure C)
 │   └── qrcodegen.h
 ├── backend/
-│   ├── server.js       - Express + Solana Devnet monitor
+│   ├── server.js       — Express + Solana Devnet monitor + balance endpoint
 │   └── package.json
 └── assets/
     └── Roboto_Condensed-Regular.ttf
@@ -158,28 +241,30 @@ gcc Dev3Pack.c ui\ui.c states\states.c network\network.c qr\qrcodegen.c -o chain
 
 ## Roadmap
 
-### ✅ Phase 1 - Concept & Architecture
+### ✅ Phase 1 — Concept & Architecture
 - State machine design
 - SDL2 simulator
 - UI screens and rendering
 
-### ✅ Phase 2 - Live Payment Flow (Current)
+### ✅ Phase 2 — Live Payment Flow (Current)
 - Real Solana Pay QR code generation
 - Raw TCP socket backend communication
 - Live Solana Devnet transaction confirmation
 - Real TX signature displayed on terminal
+- Transaction history and balance screens
+- Passive background payment monitor
 
-### 🔜 Phase 3 - Fiat On-Ramp (SolaChain)
+### 🔜 Phase 3 — Fiat On-Ramp (SolaChain)
 The biggest barrier to crypto adoption in Nigeria is that most people don't own crypto wallets. Phase 3 solves this with a **dual payment mode**:
 
 - **Mode 1:** Customer scans QR code → pays SOL directly via Phantom wallet
 - **Mode 2:** Customer sends NGN to a **SolaChain virtual bank account** → auto-converts to SOL → merchant receives SOL
 
-Both modes show on the same terminal screen. The merchant always receives SOL regardless of how the customer pays. This means **any Nigerian with a bank account can pay at a ChainEngineers terminal** - no crypto wallet required.
+Both modes show on the same terminal screen. The merchant always receives SOL regardless of how the customer pays. This means **any Nigerian with a bank account can pay at a ChainEngineers terminal** — no crypto wallet required.
 
 **Target:** 40 million Nigerian micro-merchants currently excluded from digital payments.
 
-### 🔜 Phase 4 - Hardware Deployment
+### 🔜 Phase 4 — Hardware Deployment
 Deploy on ESP32 hardware for real-world merchant locations.
 
 ---
@@ -195,6 +280,7 @@ This Digital Twin validates the full payment architecture before physical deploy
 | Winsock2 HTTP | ESP32 WiFi stack |
 | SDL_Thread | FreeRTOS task |
 | QR on screen | GM65 QR scanner module |
+| Passive monitor | Always-on FreeRTOS daemon task |
 | Status colors | LED indicators + buzzer |
 
 **Target hardware:** ESP32-WROOM-32 + ILI9341 TFT + PN532 NFC + LiPo battery
@@ -203,10 +289,10 @@ This Digital Twin validates the full payment architecture before physical deploy
 
 ## Why Solana
 
-- **Sub-second confirmation** - essential for point-of-sale UX
-- **Near-zero fees** - practical for small merchants
-- **Solana Pay standard** - QR-based payment protocol built-in
-- **Scalable infrastructure** - ready for machine-to-machine payments
+- **Sub-second confirmation** — essential for point-of-sale UX
+- **Near-zero fees** — practical for small merchants
+- **Solana Pay standard** — QR-based payment protocol built-in
+- **Scalable infrastructure** — ready for machine-to-machine payments
 
 ---
 
@@ -235,7 +321,7 @@ I am still a student. I am still learning. But I built something real that solve
 
 ## Team
 
-**Fadipe Toluwanimi Alfred** - Solo Developer
+**Fadipe Toluwanimi Alfred** — Solo Developer
 Dev3Pack Global Hackathon 2026
 Built in Nigeria 🇳🇬
 
