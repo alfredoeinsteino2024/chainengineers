@@ -10,6 +10,8 @@ const char* getStateName(TerminalState state)
         case STATE_WAITING_PAYMENT: return "WAITING_PAYMENT";
         case STATE_CONFIRMED:       return "CONFIRMED";
         case STATE_FAILED:          return "FAILED";
+        case STATE_HISTORY:         return "HISTORY";
+        case STATE_BALANCE:         return "BALANCE";
         default:                    return "UNKNOWN";
     }
 }
