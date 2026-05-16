@@ -2,8 +2,8 @@
  * network.c — ChainEngineers Payment Terminal
  * Raw socket HTTP client. No libcurl. No extra DLLs.
  * Works on Windows (Winsock2) and Linux/Mac (POSIX).
+ * Phase 3.1: Added network_fetch_history() and network_fetch_balance()
  */
-// I need to correct the extended description
 
 #include "network.h"
 #include <stdio.h>
@@ -208,6 +208,25 @@ static NetStatus parse_status(const char *s)
 }
 
 /* ─────────────────────────────────────────────
+   INTERNAL: parse a single history entry from
+   a JSON object string like:
+   {"payment_id":"...","amount_naira":500,...}
+───────────────────────────────────────────── */
+static void parse_history_entry(const char *json, HistoryEntry *entry)
+{
+    memset(entry, 0, sizeof(HistoryEntry));
+
+    char naira_str[16] = {0};
+    json_extract_string(json, "payment_id",   entry->payment_id,  NET_ID_LEN);
+    json_extract_string(json, "amount_naira", naira_str,          sizeof(naira_str));
+    json_extract_string(json, "amount_sol",   entry->amount_sol,  NET_SOL_LEN);
+    json_extract_string(json, "tx_signature", entry->tx_signature,NET_SIG_LEN);
+    json_extract_string(json, "timestamp",    entry->timestamp,   NET_TIME_LEN);
+
+    entry->amount_naira = naira_str[0] ? atoi(naira_str) : 0;
+}
+
+/* ─────────────────────────────────────────────
    PUBLIC: network_health_check
 ───────────────────────────────────────────── */
 int network_health_check(void)
@@ -288,6 +307,120 @@ int network_poll_status(const char *payment_id, PaymentResponse *out)
 }
 
 /* ─────────────────────────────────────────────
+   PUBLIC: network_fetch_history
+   GET /history
+   Parses the transactions array and fills out.
+───────────────────────────────────────────── */
+int network_fetch_history(HistoryResponse *out)
+{
+    memset(out, 0, sizeof(HistoryResponse));
+
+    /* Use larger buffer for history response */
+    char response[HTTP_BUF_SIZE * 2];
+    int code = http_request("GET", "/history", NULL, response, sizeof(response));
+
+    if (code != 200) {
+        fprintf(stderr, "[NET] fetch_history failed: HTTP %d\n", code);
+        out->error = 1;
+        return -1;
+    }
+
+    printf("[NET] /history response received\n");
+
+    /* Parse count */
+    char count_str[8] = {0};
+    json_extract_string(response, "count", count_str, sizeof(count_str));
+    int count = count_str[0] ? atoi(count_str) : 0;
+    if (count > NET_MAX_HISTORY) count = NET_MAX_HISTORY;
+    out->count = count;
+
+    if (count == 0) {
+        out->ready = 1;
+        return 0;
+    }
+
+    /* Find the transactions array */
+    const char *arr = strstr(response, "\"transactions\":");
+    if (!arr) {
+        out->ready = 1;
+        return 0;
+    }
+    arr = strchr(arr, '[');
+    if (!arr) {
+        out->ready = 1;
+        return 0;
+    }
+    arr++; /* skip '[' */
+
+    /* Parse each object { ... } in the array */
+    int idx = 0;
+    while (idx < count && *arr)
+    {
+        /* Find start of object */
+        const char *obj_start = strchr(arr, '{');
+        if (!obj_start) break;
+
+        /* Find end of object — count braces */
+        int depth = 0;
+        const char *p = obj_start;
+        const char *obj_end = NULL;
+        while (*p) {
+            if (*p == '{') depth++;
+            else if (*p == '}') {
+                depth--;
+                if (depth == 0) { obj_end = p; break; }
+            }
+            p++;
+        }
+        if (!obj_end) break;
+
+        /* Extract object into a temporary buffer */
+        int obj_len = (int)(obj_end - obj_start + 1);
+        if (obj_len < (int)sizeof(response)) {
+            char obj_buf[512];
+            int copy_len = obj_len < (int)sizeof(obj_buf) - 1
+                           ? obj_len : (int)sizeof(obj_buf) - 1;
+            memcpy(obj_buf, obj_start, copy_len);
+            obj_buf[copy_len] = '\0';
+            parse_history_entry(obj_buf, &out->entries[idx]);
+            idx++;
+        }
+        arr = obj_end + 1;
+    }
+
+    out->count = idx;
+    out->ready = 1;
+    printf("[NET] History parsed: %d transactions\n", idx);
+    return 0;
+}
+
+/* ─────────────────────────────────────────────
+   PUBLIC: network_fetch_balance
+   GET /balance
+───────────────────────────────────────────── */
+int network_fetch_balance(BalanceResponse *out)
+{
+    memset(out, 0, sizeof(BalanceResponse));
+
+    char response[HTTP_BUF_SIZE];
+    int code = http_request("GET", "/balance", NULL, response, sizeof(response));
+
+    if (code != 200) {
+        fprintf(stderr, "[NET] fetch_balance failed: HTTP %d\n", code);
+        out->error = 1;
+        return -1;
+    }
+
+    json_extract_string(response, "address",     out->address,     NET_ADDR_LEN);
+    json_extract_string(response, "balance_sol", out->balance_sol, NET_BAL_LEN);
+
+    out->ready = 1;
+    printf("[NET] Balance: %s SOL | addr=%s\n",
+           out->balance_sol, out->address);
+    return 0;
+}
+
+/* ─────────────────────────────────────────────
    PUBLIC: network_thread_create
 ───────────────────────────────────────────── */
 int network_thread_create(void *data)
@@ -300,9 +433,8 @@ int network_thread_create(void *data)
     SDL_LockMutex(d->result->mutex);
     d->result->response = result;
     d->result->ready    = 1;
-    if (ok != 0) {
+    if (ok != 0)
         d->result->response.status = NET_STATUS_ERROR;
-    }
     SDL_UnlockMutex(d->result->mutex);
 
     free(d);
@@ -331,33 +463,24 @@ int network_thread_poll(void *data)
         int ok = network_poll_status(d->payment_id, &poll_result);
 
         SDL_LockMutex(d->result->mutex);
-
-        if (ok != 0) {
-            SDL_UnlockMutex(d->result->mutex);
-            continue;
-        }
+        if (ok != 0) { SDL_UnlockMutex(d->result->mutex); continue; }
 
         d->result->response.status = poll_result.status;
-        if (poll_result.tx_signature[0]) {
+        if (poll_result.tx_signature[0])
             strncpy(d->result->response.tx_signature,
                     poll_result.tx_signature, NET_SIG_LEN - 1);
-        }
 
         int done = (poll_result.status == NET_STATUS_CONFIRMED ||
                     poll_result.status == NET_STATUS_FAILED    ||
                     poll_result.status == NET_STATUS_EXPIRED);
-
         if (done) d->result->ready = 1;
-
         SDL_UnlockMutex(d->result->mutex);
-
         if (done) break;
     }
 
     /* Signal expiry if never confirmed */
     SDL_LockMutex(d->result->mutex);
-    if (!d->result->ready)
-    {
+    if (!d->result->ready) {
         d->result->response.status = NET_STATUS_EXPIRED;
         d->result->ready = 1;
         printf("[NET] Poll timeout — payment expired after %d tries\n", tries);
@@ -365,6 +488,46 @@ int network_thread_poll(void *data)
     SDL_UnlockMutex(d->result->mutex);
 
     d->result->polling = 0;
+    free(d);
+    return 0;
+}
+
+/* ─────────────────────────────────────────────
+   PUBLIC: network_thread_history
+   SDL_Thread entry — fetches history and signals
+   main loop via mutex.
+───────────────────────────────────────────── */
+int network_thread_history(void *data)
+{
+    HistoryThreadData *d = (HistoryThreadData*)data;
+
+    HistoryResponse result;
+    network_fetch_history(&result);
+
+    SDL_LockMutex(d->mutex);
+    *(d->result) = result;
+    SDL_UnlockMutex(d->mutex);
+
+    free(d);
+    return 0;
+}
+
+/* ─────────────────────────────────────────────
+   PUBLIC: network_thread_balance
+   SDL_Thread entry — fetches balance and signals
+   main loop via mutex.
+───────────────────────────────────────────── */
+int network_thread_balance(void *data)
+{
+    BalanceThreadData *d = (BalanceThreadData*)data;
+
+    BalanceResponse result;
+    network_fetch_balance(&result);
+
+    SDL_LockMutex(d->mutex);
+    *(d->result) = result;
+    SDL_UnlockMutex(d->mutex);
+
     free(d);
     return 0;
 }
@@ -383,4 +546,17 @@ const char *network_status_name(NetStatus status)
         case NET_STATUS_ERROR:     return "ERROR";
         default:                   return "UNKNOWN";
     }
+}
+
+int network_get_balance(char *response_out, int response_max)
+{
+    return http_request("GET", "/wallet/balance", NULL,
+                        response_out, response_max);
+}
+
+void network_parse_field(const char *json, const char *key,
+                          char *out, int out_len)
+{
+    memset(out, 0, out_len);
+    json_extract_string(json, key, out, out_len);
 }
