@@ -1,31 +1,7 @@
 /*
  * Dev3Pack.c — ChainEngineers Payment Terminal
- * Phase 2: SDL2 + Network + Solana Devnet
- *
- * BUG FIXES FROM PREVIOUS VERSION:
- *
- *  BUG 1 & 2 — Unprotected reads of g_net fields after mutex release:
- *    Old: unlock mutex, then read g_net.response.payment_id[0]
- *    Fix: snapshot ALL g_net fields inside ONE mutex lock per frame,
- *         then use only local copies for all logic and prints.
- *
- *  BUG 3 — Unprotected tx_signature print:
- *    Old: printf g_net.response.tx_signature after mutex release
- *    Fix: use snap_tx local copy taken inside the mutex.
- *
- *  BUG 4 — Main freeze: ready flag never fires if JSON parse fails:
- *    Old: WAITING block only transitions when ready==1.
- *         If poll thread's JSON parser fails to extract "confirmed",
- *         ready is never set and the screen freezes permanently.
- *    Fix: check net_status DIRECTLY every frame — no ready flag needed.
- *         NET_STATUS_CONFIRMED is terminal: poll thread stops writing
- *         once set, so reading it every frame is always safe.
- *
- *  BUG 5 — No poll_start guard:
- *    Old: poll_started is a plain int with no mutex protection.
- *         start_poll_payment() could be called twice in edge cases.
- *    Fix: poll_start flag inside NetworkResult, set under mutex
- *         before thread launch, checked from snapshot each frame.
+ * Phase 4: Passive balance monitoring added
+ * Terminal watches for incoming SOL even when IDLE
  */
 
 #include <SDL2/SDL.h>
@@ -43,10 +19,99 @@
 #define HEIGHT 480
 
 /* ─────────────────────────────────────────────
-   GLOBAL: shared network result
-   Written by network threads, read by main loop.
+   GLOBALS
 ───────────────────────────────────────────── */
 NetworkResult g_net;
+TxHistory     g_history;
+char          g_balance_sol[32]   = "";
+char          g_balance_naira[32] = "";
+
+/* Passive monitor shared state */
+SDL_mutex    *g_monitor_mutex     = NULL;
+char          g_incoming_tx[TX_SIG_LEN]  = "";
+char          g_incoming_sol[TX_SOL_LEN] = "";
+int           g_incoming_ready           = 0;
+
+/* ─────────────────────────────────────────────
+   INTERNAL: record a confirmed transaction
+───────────────────────────────────────────── */
+static void record_transaction(const char *naira,
+                                const char *sol,
+                                const char *tx,
+                                const char *pay_id)
+{
+    if (g_history.count >= MAX_HISTORY)
+    {
+        memmove(&g_history.records[0], &g_history.records[1],
+                sizeof(TxRecord) * (MAX_HISTORY - 1));
+        g_history.count = MAX_HISTORY - 1;
+    }
+
+    TxRecord *r = &g_history.records[g_history.count];
+    memset(r, 0, sizeof(TxRecord));
+
+    strncpy(r->naira,        naira,   15);
+    strncpy(r->amount_sol,   sol,     TX_SOL_LEN - 1);
+    strncpy(r->tx_signature, tx,      TX_SIG_LEN - 1);
+    strncpy(r->payment_id,   pay_id,  TX_ID_LEN  - 1);
+
+    Uint32 t = SDL_GetTicks() / 1000;
+    snprintf(r->timestamp, sizeof(r->timestamp), "%02d:%02d:%02d",
+             (t / 3600) % 24, (t / 60) % 60, t % 60);
+
+    g_history.count++;
+    printf("[MAIN] Transaction recorded. Total: %d\n", g_history.count);
+    fflush(stdout);
+}
+
+/* ─────────────────────────────────────────────
+   PASSIVE MONITOR THREAD
+   Polls backend every 10 seconds for any new
+   incoming transaction on the terminal wallet.
+   Works regardless of current terminal state.
+───────────────────────────────────────────── */
+int passive_monitor_thread(void *data)
+{
+    (void)data;
+    printf("[MONITOR] Passive monitor started\n");
+    fflush(stdout);
+
+    while (1)
+    {
+        SDL_Delay(10000); /* check every 10 seconds */
+
+        /* Call backend balance/monitor endpoint */
+        char response[4096];
+        int code = network_get_balance(response, sizeof(response));
+
+        if (code != 200) continue;
+
+        /* Parse incoming_sol and tx fields */
+        char inc_sol[TX_SOL_LEN] = "";
+        char inc_tx[TX_SIG_LEN]  = "";
+        network_parse_field(response, "incoming_sol", inc_sol, sizeof(inc_sol));
+        network_parse_field(response, "last_tx",      inc_tx,  sizeof(inc_tx));
+
+        if (inc_sol[0] && inc_tx[0])
+        {
+            SDL_LockMutex(g_monitor_mutex);
+
+            /* Only notify if this is a new TX */
+            if (strcmp(inc_tx, g_incoming_tx) != 0)
+            {
+                strncpy(g_incoming_tx,  inc_tx,  TX_SIG_LEN - 1);
+                strncpy(g_incoming_sol, inc_sol, TX_SOL_LEN - 1);
+                strncpy(g_balance_sol,  inc_sol, 31);
+                g_incoming_ready = 1;
+                printf("[MONITOR] New incoming TX detected: %s\n", inc_tx);
+                fflush(stdout);
+            }
+
+            SDL_UnlockMutex(g_monitor_mutex);
+        }
+    }
+    return 0;
+}
 
 /* ─────────────────────────────────────────────
    INTERNAL: kick off payment creation thread
@@ -58,7 +123,7 @@ static void start_create_payment(int amount_naira)
     g_net.ready      = 0;
     g_net.stop       = 0;
     g_net.polling    = 0;
-    g_net.poll_start = 0;   /* FIX 5: guard flag reset */
+    g_net.poll_start = 0;
     SDL_UnlockMutex(g_net.mutex);
 
     CreateThreadData *data = malloc(sizeof(CreateThreadData));
@@ -82,7 +147,7 @@ static void start_poll_payment(const char *payment_id)
     g_net.ready      = 0;
     g_net.stop       = 0;
     g_net.polling    = 1;
-    g_net.poll_start = 1;   /* FIX 5: mark poll as started under mutex */
+    g_net.poll_start = 1;
     SDL_UnlockMutex(g_net.mutex);
 
     PollThreadData *data = malloc(sizeof(PollThreadData));
@@ -103,7 +168,6 @@ static void start_poll_payment(const char *payment_id)
 ───────────────────────────────────────────── */
 int main(int argc, char *argv[])
 {
-    /* ── SDL + TTF init ──────────────────── */
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
     { printf("SDL Init Error: %s\n", SDL_GetError()); return 1; }
 
@@ -127,21 +191,31 @@ int main(int argc, char *argv[])
     TTF_Font *fontLarge = TTF_OpenFont("assets/Roboto_Condensed-Regular.ttf", 56);
     if (!fontLarge) { printf("Font Large Error: %s\n", TTF_GetError()); return 1; }
 
-    /* ── Network init ────────────────────── */
-    memset(&g_net, 0, sizeof(NetworkResult));
-    g_net.mutex = SDL_CreateMutex();
-    if (!g_net.mutex) {
+    /* ── Init globals ────────────────────── */
+    memset(&g_net,     0, sizeof(NetworkResult));
+    memset(&g_history, 0, sizeof(TxHistory));
+
+    g_net.mutex     = SDL_CreateMutex();
+    g_monitor_mutex = SDL_CreateMutex();
+
+    if (!g_net.mutex || !g_monitor_mutex) {
         printf("Mutex Error: %s\n", SDL_GetError());
         return 1;
     }
 
+    /* ── Network init ────────────────────── */
     if (network_init() != 0) {
-        printf("[MAIN] WARNING: Network init failed. Running in offline mode.\n");
+        printf("[MAIN] WARNING: Network init failed.\n");
     } else {
         printf("[MAIN] Backend health: %s\n",
                network_health_check() ? "ONLINE" : "OFFLINE");
         fflush(stdout);
     }
+
+    /* ── Start passive monitor thread ───── */
+    SDL_Thread *monitor = SDL_CreateThread(passive_monitor_thread,
+                                           "PassiveMonitor", NULL);
+    SDL_DetachThread(monitor);
 
     /* ── Terminal state ──────────────────── */
     TerminalState currentState = STATE_IDLE;
@@ -153,7 +227,7 @@ int main(int argc, char *argv[])
     SDL_StartTextInput();
 
     printf("ChainEngineers Terminal Started\n");
-    printf("State: %s\n", getStateName(currentState));
+    printf("Keys: ENTER=pay  H=history  B=balance  ESC=back\n");
     fflush(stdout);
 
     /* ── Main loop ───────────────────────── */
@@ -171,9 +245,6 @@ int main(int argc, char *argv[])
                 char c = event.text.text[0];
                 if (c >= '0' && c <= '9') {
                     appendDigit(&amount, c);
-                    printf("[MAIN] State: %s | Amount: %s\n",
-                           getStateName(currentState), amount.digits);
-                    fflush(stdout);
                 }
             }
 
@@ -185,6 +256,9 @@ int main(int argc, char *argv[])
                 {
                     if (currentState == STATE_IDLE) {
                         running = false;
+                    } else if (currentState == STATE_HISTORY ||
+                               currentState == STATE_BALANCE) {
+                        currentState = STATE_IDLE;
                     } else {
                         SDL_LockMutex(g_net.mutex);
                         g_net.stop = 1;
@@ -198,6 +272,12 @@ int main(int argc, char *argv[])
                     if (key == SDLK_RETURN) {
                         clearAmount(&amount);
                         currentState = STATE_ENTER_AMOUNT;
+                    }
+                    else if (key == SDLK_h) {
+                        currentState = STATE_HISTORY;
+                    }
+                    else if (key == SDLK_b) {
+                        currentState = STATE_BALANCE;
                     }
                 }
                 else if (currentState == STATE_ENTER_AMOUNT)
@@ -219,12 +299,10 @@ int main(int argc, char *argv[])
                     if (key == SDLK_p) {
                         currentState = STATE_CONFIRMED;
                         printf("[DEBUG] Manual confirm\n");
-                        fflush(stdout);
                     }
                     if (key == SDLK_f) {
                         currentState = STATE_FAILED;
                         printf("[DEBUG] Manual fail\n");
-                        fflush(stdout);
                     }
                 }
                 else if (currentState == STATE_CONFIRMED)
@@ -232,6 +310,9 @@ int main(int argc, char *argv[])
                     if (key == SDLK_RETURN) {
                         clearAmount(&amount);
                         currentState = STATE_IDLE;
+                    }
+                    else if (key == SDLK_h) {
+                        currentState = STATE_HISTORY;
                     }
                 }
                 else if (currentState == STATE_FAILED)
@@ -241,35 +322,70 @@ int main(int argc, char *argv[])
                         currentState = STATE_IDLE;
                     }
                 }
+                else if (currentState == STATE_HISTORY)
+                {
+                    if (key == SDLK_UP && g_history.selected > 0)
+                        g_history.selected--;
+                    else if (key == SDLK_DOWN &&
+                             g_history.selected < g_history.count - 1)
+                        g_history.selected++;
+                }
 
-                printf("[MAIN] State: %s | Amount: %s\n",
-                       getStateName(currentState), amount.digits);
+                printf("[MAIN] State: %s\n", getStateName(currentState));
                 fflush(stdout);
             }
         }
 
-        /* ────────────────────────────────────────────────────────
-           NETWORK STATE CHECK
-           
-           FIX 1,2,3: ONE mutex lock per frame. ALL g_net fields
-           copied to local variables. Zero g_net access after unlock.
-        ──────────────────────────────────────────────────────────*/
+        /* ── Passive monitor check ───────── */
+        /* Runs every frame — catches incoming SOL even when IDLE */
+        {
+            SDL_LockMutex(g_monitor_mutex);
+            int    inc_ready = g_incoming_ready;
+            char   inc_tx[TX_SIG_LEN]  = "";
+            char   inc_sol[TX_SOL_LEN] = "";
+            strncpy(inc_tx,  g_incoming_tx,  TX_SIG_LEN - 1);
+            strncpy(inc_sol, g_incoming_sol, TX_SOL_LEN - 1);
+            if (inc_ready) g_incoming_ready = 0; /* clear flag */
+            SDL_UnlockMutex(g_monitor_mutex);
+
+            if (inc_ready)
+            {
+                printf("[MAIN] Passive: incoming %s SOL TX=%s\n",
+                       inc_sol, inc_tx);
+                fflush(stdout);
+
+                /* Record in history */
+                record_transaction("?", inc_sol, inc_tx, "PASSIVE");
+
+                /* Update balance */
+                snprintf(g_balance_sol, sizeof(g_balance_sol),
+                         "%s SOL", inc_sol);
+
+                /* If IDLE — jump to CONFIRMED to show notification */
+                if (currentState == STATE_IDLE)
+                    currentState = STATE_CONFIRMED;
+            }
+        }
+
+        /* ── Network state check ─────────── */
         {
             NetStatus net_status;
             int       net_poll_start;
             char      snap_id[NET_ID_LEN];
             char      snap_tx[NET_SIG_LEN];
+            char      snap_sol[NET_SOL_LEN];
 
             SDL_LockMutex(g_net.mutex);
             net_status     = g_net.response.status;
             net_poll_start = g_net.poll_start;
-            strncpy(snap_id, g_net.response.payment_id,   NET_ID_LEN  - 1);
-            strncpy(snap_tx, g_net.response.tx_signature, NET_SIG_LEN - 1);
-            snap_id[NET_ID_LEN  - 1] = '\0';
-            snap_tx[NET_SIG_LEN - 1] = '\0';
+            strncpy(snap_id,  g_net.response.payment_id,   NET_ID_LEN  - 1);
+            strncpy(snap_tx,  g_net.response.tx_signature, NET_SIG_LEN - 1);
+            strncpy(snap_sol, g_net.response.amount_sol,   NET_SOL_LEN - 1);
+            snap_id[NET_ID_LEN   - 1] = '\0';
+            snap_tx[NET_SIG_LEN  - 1] = '\0';
+            snap_sol[NET_SOL_LEN - 1] = '\0';
             SDL_UnlockMutex(g_net.mutex);
 
-            /* ── PROCESSING: wait for create thread ── */
             if (currentState == STATE_PROCESSING)
             {
                 if (net_status == NET_STATUS_ERROR)
@@ -278,8 +394,6 @@ int main(int argc, char *argv[])
                     fflush(stdout);
                     currentState = STATE_FAILED;
                 }
-                /* FIX 1,2: snap_id used — no unprotected g_net read */
-                /* FIX 5:   net_poll_start prevents double thread launch */
                 else if (net_status == NET_STATUS_PENDING
                          && snap_id[0] != '\0'
                          && !net_poll_start)
@@ -290,42 +404,28 @@ int main(int argc, char *argv[])
                     start_poll_payment(snap_id);
                 }
             }
-
-            /* ── WAITING: watch poll thread result ──
-             *
-             * FIX 4 — THE KEY FIX:
-             * We check net_status directly every frame.
-             * We do NOT require ready==1.
-             *
-             * Why this fixes the freeze:
-             * The poll thread writes status=CONFIRMED then sets ready=1.
-             * With the old code, if the JSON parse silently failed,
-             * status stayed PENDING and ready stayed 0 — frozen forever.
-             * Now we check the status value itself. The moment the poll
-             * thread writes NET_STATUS_CONFIRMED into g_net.response.status,
-             * the very next frame we catch it here and transition.
-             *
-             * Safety: NET_STATUS_CONFIRMED is a terminal state.
-             * The poll thread stops all writes once it sets this value,
-             * so reading it directly every frame is race-condition safe.
-            ─────────────────────────────────────────────────────── */
             else if (currentState == STATE_WAITING_PAYMENT)
             {
-                /* Debug: print status every frame so you can see it changing */
                 static NetStatus last_printed = NET_STATUS_NONE;
                 if (net_status != last_printed) {
-                    printf("[NET POLL] status=%s id=%.8s tx=%.16s\n",
-                           network_status_name(net_status), snap_id, snap_tx);
+                    printf("[NET POLL] status=%s\n",
+                           network_status_name(net_status));
                     fflush(stdout);
                     last_printed = net_status;
                 }
 
                 if (net_status == NET_STATUS_CONFIRMED)
                 {
-                    /* FIX 3: snap_tx used — no unprotected g_net read */
                     printf("[MAIN] *** PAYMENT CONFIRMED *** TX=%.24s...\n",
                            snap_tx);
                     fflush(stdout);
+
+                    record_transaction(amount.digits, snap_sol,
+                                       snap_tx, snap_id);
+
+                    snprintf(g_balance_sol, sizeof(g_balance_sol),
+                             "%s SOL", snap_sol);
+
                     currentState = STATE_CONFIRMED;
                 }
                 else if (net_status == NET_STATUS_FAILED  ||
@@ -353,6 +453,7 @@ int main(int argc, char *argv[])
 
     network_cleanup();
     SDL_DestroyMutex(g_net.mutex);
+    SDL_DestroyMutex(g_monitor_mutex);
 
     TTF_CloseFont(fontLarge);
     TTF_CloseFont(font);
