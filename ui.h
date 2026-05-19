@@ -13,6 +13,8 @@ void renderProcessingScreen(SDL_Renderer *renderer, TTF_Font *font, TTF_Font *fo
 void renderWaitingScreen(SDL_Renderer *renderer, TTF_Font *font, TTF_Font *fontLarge, const AmountInput *amount);
 void renderConfirmedScreen(SDL_Renderer *renderer, TTF_Font *font, TTF_Font *fontLarge, const AmountInput *amount);
 void renderFailedScreen(SDL_Renderer *renderer, TTF_Font *font, TTF_Font *fontLarge, const AmountInput *amount);
+void renderHistoryScreen(SDL_Renderer *renderer, TTF_Font *font, TTF_Font *fontLarge, const AmountInput *amount);
+void renderBalanceScreen(SDL_Renderer *renderer, TTF_Font *font, TTF_Font *fontLarge, const AmountInput *amount);
 
 extern RenderFn renderScreen[STATE_COUNT];
 
