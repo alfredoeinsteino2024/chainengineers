@@ -24,8 +24,9 @@ RenderFn renderScreen[STATE_COUNT] = {
     [STATE_WAITING_PAYMENT] = renderWaitingScreen,
     [STATE_CONFIRMED]       = renderConfirmedScreen,
     [STATE_FAILED]          = renderFailedScreen,
+    [STATE_HISTORY]         = renderHistoryScreen,
+    [STATE_BALANCE]         = renderBalanceScreen,
 };
-
 /* ─────────────────────────────────────────────
    INTERNAL: draw text centered on X axis
 ───────────────────────────────────────────── */
@@ -409,4 +410,108 @@ void renderFailedScreen(SDL_Renderer *renderer, TTF_Font *font,
     }
     drawTextCentered(renderer, font, "Press ENTER to try again", gray,  800, 330);
     drawTextCentered(renderer, font, "ESC to return to home",    gray,  800, 365);
+}
+
+/* ─────────────────────────────────────────────
+   SCREEN: HISTORY
+───────────────────────────────────────────── */
+void renderHistoryScreen(SDL_Renderer *renderer, TTF_Font *font,
+                          TTF_Font *fontLarge, const AmountInput *amount)
+{
+    SDL_SetRenderDrawColor(renderer, 15, 15, 15, 255);
+    SDL_RenderClear(renderer);
+    drawCard(renderer, 100, 80, 255);
+
+    SDL_Color white  = {255, 255, 255, 255};
+    SDL_Color gray   = {160, 160, 160, 255};
+    SDL_Color green  = {0,   220, 120, 255};
+    SDL_Color purple = {180, 100, 255, 255};
+    SDL_Color amber  = {255, 200,  50, 255};
+
+    drawTextCentered(renderer, font, "TRANSACTION HISTORY", white, 800, 75);
+
+    /* Read history from g_net — guarded */
+    extern TxHistory g_history;
+
+    if (g_history.count == 0)
+    {
+        drawTextCentered(renderer, font, "No transactions yet", gray, 800, 220);
+        drawTextCentered(renderer, font, "ESC to go back",      gray, 800, 380);
+        return;
+    }
+
+    /* Show up to 4 most recent transactions */
+    int start = g_history.count - 1;
+    int shown = 0;
+    int y     = 110;
+
+    for (int i = start; i >= 0 && shown < 4; i--, shown++)
+    {
+        TxRecord *r = &g_history.records[i];
+
+        /* Row background */
+        SDL_Rect row = {115, y, 570, 56};
+        SDL_SetRenderDrawColor(renderer, 25, 25, 40, 255);
+        SDL_RenderFillRect(renderer, &row);
+        SDL_SetRenderDrawColor(renderer, 50, 50, 80, 255);
+        SDL_RenderDrawRect(renderer, &row);
+
+        /* Amount */
+        char naira_str[32];
+        snprintf(naira_str, sizeof(naira_str), "N%s", r->naira);
+        drawText(renderer, font, naira_str, green, 130, y + 8);
+
+        /* SOL amount */
+        char sol_str[32];
+        snprintf(sol_str, sizeof(sol_str), "%s SOL", r->amount_sol);
+        drawText(renderer, font, sol_str, amber, 130, y + 30);
+
+        /* TX signature truncated */
+        char tx_str[32];
+        snprintf(tx_str, sizeof(tx_str), "TX: %.20s...", r->tx_signature);
+        drawText(renderer, font, tx_str, purple, 310, y + 8);
+
+        /* Timestamp */
+        drawText(renderer, font, r->timestamp, gray, 310, y + 30);
+
+        y += 64;
+    }
+
+    char count_str[32];
+    snprintf(count_str, sizeof(count_str), "Total: %d transaction%s",
+             g_history.count, g_history.count == 1 ? "" : "s");
+    drawTextCentered(renderer, font, count_str, gray,  800, 378);
+    drawTextCentered(renderer, font, "ESC to go back", gray, 800, 408);
+}
+
+/* ─────────────────────────────────────────────
+   SCREEN: BALANCE
+───────────────────────────────────────────── */
+void renderBalanceScreen(SDL_Renderer *renderer, TTF_Font *font,
+                          TTF_Font *fontLarge, const AmountInput *amount)
+{
+    SDL_SetRenderDrawColor(renderer, 15, 15, 15, 255);
+    SDL_RenderClear(renderer);
+    drawCard(renderer, 0, 200, 180);
+
+    SDL_Color white = {255, 255, 255, 255};
+    SDL_Color gray  = {160, 160, 160, 255};
+    SDL_Color teal  = {0,   220, 180, 255};
+    SDL_Color amber = {255, 200,  50, 255};
+
+    extern char g_balance_sol[32];
+    extern char g_balance_naira[32];
+
+    drawTextCentered(renderer, font,      "TERMINAL BALANCE",  white, 800, 100);
+    drawTextCentered(renderer, fontLarge, g_balance_sol[0] ? g_balance_sol : "...", teal, 800, 160);
+    drawTextCentered(renderer, font,      "SOL",               gray,  800, 240);
+
+    if (g_balance_naira[0]) {
+        char naira_line[48];
+        snprintf(naira_line, sizeof(naira_line), "≈ %s NGN", g_balance_naira);
+        drawTextCentered(renderer, font, naira_line, amber, 800, 280);
+    }
+
+    drawTextCentered(renderer, font, "Solana Devnet",   gray, 800, 330);
+    drawTextCentered(renderer, font, "ESC to go back",  gray, 800, 390);
 }
